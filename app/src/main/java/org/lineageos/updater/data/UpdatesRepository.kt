@@ -46,8 +46,21 @@ class UpdatesRepository(
     suspend fun fetchUpdates(): Long? {
         if (!networkMonitor.currentNetworkState.isOnline) return null
 
-        val networkUpdatesRaw = withContext(Dispatchers.IO) {
-            networkDataSource.fetchUpdates()
+        val localUpdates = withContext(Dispatchers.IO) {
+            localDataSource.getUpdates()
+        }.associateBy { it.downloadId }
+
+        withContext(Dispatchers.IO) {
+            localUpdates.values.filter {
+                it.downloadId != Update.LOCAL_ID && !filterUpdates(it)
+            }.forEach {
+                it.file?.delete()
+                localDataSource.removeUpdate(it.downloadId)
+            }
+        }
+
+        val networkUpdates = withContext(Dispatchers.IO) {
+            networkDataSource.fetchUpdates().map { it.toUpdate() }.filter { filterUpdates(it) }
         }
 
         _deviceMetadata.value = DeviceMetadata(
@@ -75,10 +88,6 @@ class UpdatesRepository(
         if (networkUpdates.isEmpty()) return System.currentTimeMillis()
 
         val networkIds = networkUpdates.map { it.downloadId }.toSet()
-
-        val localUpdates = withContext(Dispatchers.IO) {
-            localDataSource.getUpdates()
-        }.associateBy { it.downloadId }
 
         if (localUpdates.isNotEmpty() && networkUpdates.any { it.downloadId !in localUpdates }) {
             notificationHelper.showNewUpdatesNotification()
